@@ -18,14 +18,14 @@
 
 **Method 1: Using pip (Recommended)**
 ```bash
-git clone https://github.com/yourusername/infernal.git
+git clone https://github.com/chandraprvkvsh/Infernal.git
 cd infernal
 pip install -e .
 ```
 
 **Method 2: Direct installation**
 ```bash
-git clone https://github.com/yourusername/infernal.git
+git clone https://github.com/chandraprvkvsh/Infernal.git
 cd infernal
 pip install -r requirements.txt
 ```
@@ -202,19 +202,9 @@ The finetuning process will:
 3. Apply LoRA adapters for efficient training (if enabled)
 4. Train the model using HuggingFace Trainer
 5. Merge adapters back into the base model
-6. Save the result for GGUF conversion
+6. Save the result in standard Hugging Face format
 
-After training completes, convert to GGUF format:
-
-```bash
-python3 convert_hf_to_gguf.py --in my-custom-bot-merged --out my-custom-bot.gguf
-```
-
-Upload to HuggingFace (optional):
-
-```bash
-huggingface-cli upload my-username/my-custom-bot my-custom-bot.gguf
-```
+You can optionally convert the merged model to GGUF format using `llama-cpp`, and push the converted model to Hugging Face if desired.
 
 Then use your custom model:
 
@@ -331,8 +321,8 @@ Models are configured automatically, but you can modify settings in `models/conf
   "default_model": null,
   "settings": {
     "max_tokens": 2048,
-    "temperature": 0.7,
-    "top_p": 0.9
+    "temperature": 0.2,
+    "top_p": 0.7
   }
 }
 ```
@@ -368,7 +358,7 @@ Models are configured automatically, but you can modify settings in `models/conf
 For NVIDIA GPU acceleration:
 ```bash
 pip uninstall llama-cpp-python
-pip install llama-cpp-python --force-reinstall --index-url=https://jllllll.github.io/llama-cpp-python-cuBLAS-wheels/AVX2/cu118
+pip install llama-cpp-python --force-reinstall
 ```
 
 ### Memory Management
@@ -487,55 +477,14 @@ infernal/
 ├── pyproject.toml             # Modern Python project configuration
 ├── README.md                  # This documentation
 ├── tests/                     # Test suite
-│   └── test_benchmark.py
+│   ├── test_benchmark.py
+│   ├── test_cli.py
+│   ├── test_inference.py
+│   ├── test_model_management.py
+│   └── test_integration.py
 ├── Modelfile                  # Example Modelfile for finetuning
 └── models/                    # Model storage (created automatically)
     └── config.json            # Model configuration
-```
-
-## Example Workflows
-
-### Workflow 1: Quick Start
-```bash
-# Install globally
-pip install -e .
-
-# Download a model
-infernal pull --repo-id microsoft/DialoGPT-medium --filename pytorch_model.bin
-
-# Chat with it
-infernal run DialoGPT-medium --interactive
-```
-
-### Workflow 2: Custom Finetuning
-```bash
-# Create your Modelfile (see examples above)
-nano Modelfile
-
-# Finetune the model
-infernal finetune --modelfile Modelfile --output my-assistant
-
-# Convert to GGUF
-python3 convert_hf_to_gguf.py --in my-assistant-merged --out my-assistant.gguf
-
-# Upload to HuggingFace
-huggingface-cli upload my-username/my-assistant my-assistant.gguf
-
-# Use your custom model
-infernal pull --url https://huggingface.co/my-username/my-assistant/resolve/main/my-assistant.gguf
-infernal run my-assistant --interactive
-```
-
-### Workflow 3: Performance Analysis
-```bash
-# Download a model
-infernal pull --repo-id TheBloke/Llama-2-7B-Chat-GGUF --filename llama-2-7b-chat.Q4_K_M.gguf
-
-# Run comprehensive benchmarks
-infernal benchmark llama-2-7b-chat.Q4_K_M.gguf --prompt "Write a detailed explanation of machine learning" --repeat 10
-
-# Test with multiple prompts from file
-infernal benchmark llama-2-7b-chat.Q4_K_M.gguf --promptfile test_prompts.txt
 ```
 
 ## Contributing
@@ -548,14 +497,6 @@ We welcome contributions! Here's how to get started:
 4. Add tests for new functionality
 5. Update documentation if needed
 6. Submit a pull request
-
-### Development Setup
-```bash
-git clone https://github.com/yourusername/infernal.git
-cd infernal
-pip install -e .[dev] # Install with development dependencies
-python -m pytest tests/ # Run tests
-```
 
 ## License
 

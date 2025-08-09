@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Infernal - A lightweight local LLM inference and benchmarking tool with finetuning capabilities
 """
@@ -9,7 +8,7 @@ import json
 import click
 import requests
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
 from rich.prompt import Prompt
@@ -57,24 +56,35 @@ class InfernalLLM:
     def load_config(self):
         """Load or create configuration file"""
         if self.config_file.exists():
-            with open(self.config_file, 'r') as f:
-                self.config = json.load(f)
+            try:
+                with open(self.config_file, 'r') as f:
+                    self.config = json.load(f)
+            except (json.JSONDecodeError, IOError) as e:
+                console.print(f"Error loading config: {e}. Creating new config.")
+                self.config = self._default_config()
         else:
-            self.config = {
-                "models": {},
-                "default_model": None,
-                "settings": {
-                    "max_tokens": 2048,
-                    "temperature": 0.7,
-                    "top_p": 0.9
-                }
+            self.config = self._default_config()
+        self.save_config()
+
+    def _default_config(self):
+        """Get default configuration"""
+        return {
+            "models": {},
+            "default_model": None,
+            "settings": {
+                "max_tokens": 2048,
+                "temperature": 0.2,
+                "top_p": 0.7
             }
-            self.save_config()
+        }
 
     def save_config(self):
         """Save configuration to file"""
-        with open(self.config_file, 'w') as f:
-            json.dump(self.config, f, indent=2)
+        try:
+            with open(self.config_file, 'w') as f:
+                json.dump(self.config, f, indent=2)
+        except IOError as e:
+            console.print(f"Error saving config: {e}")
 
     def get_model_path(self, model_name: str) -> Optional[Path]:
         """Get the local path for a model"""
@@ -84,6 +94,10 @@ class InfernalLLM:
                 return model_path
         return None
 
+    def get_model_files(self) -> List[Path]:
+        """Get all GGUF model files in the models directory"""
+        return list(self.models_dir.glob("*.gguf"))
+
     def download_model(self, model_url: str) -> Path:
         """Download a model from URL using Hugging Face hub"""
         try:
@@ -91,42 +105,10 @@ class InfernalLLM:
                 parts = model_url.split("/")
                 repo_id = f"{parts[3]}/{parts[4]}"
                 filename_in_repo = parts[-1]
-                model_name = repo_id.split("/")[-1]
-                
-                console.print(f"Detected Hugging Face repo: {repo_id}, file: {filename_in_repo}")
-                console.print(f"Model name: {model_name}")
-                
-                filename = f"{model_name}.gguf"
-                model_path = self.models_dir / filename
-
-                if model_path.exists():
-                    console.print(f"Model {model_name} already exists at {model_path}")
-                    return model_path
-
-                with console.status(f"Downloading {model_name} from Hugging Face..."):
-                    downloaded_path = huggingface_hub.hf_hub_download(
-                        repo_id=repo_id,
-                        filename=filename_in_repo,
-                        local_dir=self.models_dir,
-                        local_dir_use_symlinks=False
-                    )
-
-                if Path(downloaded_path).exists():
-                    Path(downloaded_path).rename(model_path)
-
-                self.config["models"][model_name] = {
-                    "filename": filename,
-                    "repo_id": repo_id,
-                    "original_filename": filename_in_repo,
-                    "size": model_path.stat().st_size
-                }
-                self.save_config()
-                console.print(f"Model {model_name} downloaded successfully!")
-                return model_path
+                return self.download_from_huggingface(repo_id, filename_in_repo)
             else:
                 console.print("Please provide a Hugging Face URL for automatic model name extraction")
                 raise ValueError("Only Hugging Face URLs are supported")
-
         except Exception as e:
             console.print(f"Error downloading model: {e}")
             raise
@@ -142,19 +124,17 @@ class InfernalLLM:
             return model_path
 
         console.print(f"Downloading {model_name} from Hugging Face ({repo_id})...")
-
         try:
             with console.status(f"Downloading {model_name} from Hugging Face..."):
-                huggingface_hub.hf_hub_download(
+                downloaded_path = huggingface_hub.hf_hub_download(
                     repo_id=repo_id,
                     filename=filename,
                     local_dir=self.models_dir,
                     local_dir_use_symlinks=False
                 )
 
-            downloaded_path = self.models_dir / filename
-            if downloaded_path.exists():
-                downloaded_path.rename(model_path)
+            if Path(downloaded_path).exists():
+                Path(downloaded_path).rename(model_path)
 
             self.config["models"][model_name] = {
                 "filename": local_filename,
@@ -162,21 +142,29 @@ class InfernalLLM:
                 "original_filename": filename,
                 "size": model_path.stat().st_size
             }
+            
             self.save_config()
             console.print(f"Model {model_name} downloaded successfully!")
             return model_path
-
         except Exception as e:
             console.print(f"Error downloading model: {e}")
             raise
 
+    def pull_model(self, repo_id: str, filename: str) -> Path:
+        """Alias for download_from_huggingface for test compatibility"""
+        return self.download_from_huggingface(repo_id, filename)
+
+    def pull_from_url(self, model_url: str) -> Path:
+        """Alias for download_model for test compatibility"""
+        return self.download_model(model_url)
+
     def list_models(self):
         """List all available models"""
         if not self.config["models"]:
-            console.print("No models installed. Use 'infernal pull' to download a model.")
+            console.print("No models found. Use 'infernal pull' to download a model.")
             return
 
-        console.print("\nInstalled Models:")
+        console.print("\nAvailable Models:")
         for name, info in self.config["models"].items():
             size_mb = info.get("size", 0) / (1024 * 1024)
             status = "✓" if (self.models_dir / info["filename"]).exists() else "✗"
@@ -184,13 +172,17 @@ class InfernalLLM:
 
     def run_model(self, model_name: str, prompt: str = None, interactive: bool = False):
         """Run a model for inference"""
+        return self.run_inference(model_name, prompt, interactive)
+
+    def run_inference(self, model_name: str, prompt: str = None, interactive: bool = False):
+        """Run a model for inference (test-compatible method name)"""
         model_path = self.get_model_path(model_name)
         if not model_path:
-            console.print(f"Model '{model_name}' not found. Use 'infernal pull' to download it.")
+            console.print(f"Model {model_name} not found. Use 'infernal pull' to download it.")
             return
 
         try:
-            console.print(f"Loading model {model_name}...")
+            console.print(f"Loading {model_name}...")
             llm = Llama(
                 model_path=str(model_path),
                 n_ctx=2048,
@@ -201,7 +193,7 @@ class InfernalLLM:
                 self.interactive_chat(llm, model_name)
             else:
                 if not prompt:
-                    prompt = Prompt.ask("Enter your prompt")
+                    prompt = Prompt.ask("Enter prompt")
 
                 response = llm(
                     prompt,
@@ -214,17 +206,16 @@ class InfernalLLM:
                 console.print(Panel(response["choices"][0]["text"], title="Response"))
 
         except Exception as e:
-            console.print(f"Error running model: {e}")
+            console.print(f"Inference error: {e}")
 
     def interactive_chat(self, llm, model_name: str):
         """Interactive chat mode"""
-        console.print(f"\nChat with {model_name} (type 'quit' to exit)")
+        console.print(f"\nInfernal Chat: {model_name} (type 'quit' to exit)")
         console.print("=" * 50)
         
         while True:
             try:
                 user_input = Prompt.ask("\nYou")
-                
                 if user_input.lower() in ['quit', 'exit', 'q']:
                     break
                     
@@ -240,15 +231,15 @@ class InfernalLLM:
                         top_p=self.config["settings"]["top_p"],
                         stop=["User:", "\n\n"]
                     )
-                
+
                 console.print(response["choices"][0]["text"])
                 
             except KeyboardInterrupt:
                 break
             except Exception as e:
                 console.print(f"Error: {e}")
-        
-        console.print("\nGoodbye!")
+                
+        console.print("\nInfernal session ended!")
 
     def benchmark_model(self, model_name: str, prompts: list, repeat: int = 1):
         """Benchmark model speed and memory usage"""
@@ -374,7 +365,7 @@ class InfernalLLM:
     def remove_model(self, model_name: str):
         """Remove a model"""
         if model_name not in self.config["models"]:
-            console.print(f"Model '{model_name}' not found")
+            console.print(f"Model {model_name} not found")
             return
 
         model_path = self.get_model_path(model_name)
@@ -384,7 +375,7 @@ class InfernalLLM:
 
         del self.config["models"][model_name]
         self.save_config()
-        console.print(f"Removed model '{model_name}' from configuration")
+        console.print(f"Removed {model_name} from configuration")
 
 
 def parse_modelfile(modelfile_path):
@@ -409,8 +400,9 @@ def parse_modelfile(modelfile_path):
                 config['FROM'] = line[len('FROM '):].strip()
             elif line.startswith('PARAMETER '):
                 param = line[len('PARAMETER '):].strip()
-                key, value = param.split(' ', 1)
-                config['PARAMETER'][key] = value
+                if ' ' in param:
+                    key, value = param.split(' ', 1)
+                    config['PARAMETER'][key] = value
             elif line.startswith('SYSTEM '):
                 config['SYSTEM'] = line[len('SYSTEM '):].strip()
             elif line.startswith('MESSAGE '):
@@ -462,8 +454,8 @@ def pull(ctx, url, repo_id, filename):
     else:
         console.print("Please provide either --url or both --repo-id and --filename")
         console.print("\nExample:")
-        console.print(" infernal pull --url https://huggingface.co/google/gemma-3-1b-it-qat-q4_0-gguf/resolve/main/gemma-3-1b-it-q4_0.gguf")
-        console.print(" infernal pull --repo-id TheBloke/Llama-2-7B-Chat-GGUF --filename llama-2-7b-chat.Q4_K_M.gguf")
+        console.print("  infernal pull --url https://huggingface.co/google/gemma-3-1b-it-qat-q4_0-gguf/resolve/main/gemma-3-1b-it-q4_0.gguf")
+        console.print("  infernal pull --repo-id TheBloke/Llama-2-7B-Chat-GGUF --filename llama-2-7b-chat.Q4_K_M.gguf")
 
 
 @cli.command()
@@ -492,6 +484,49 @@ def remove(ctx, model_name):
     """Remove a model"""
     infernal = ctx.obj['infernal']
     infernal.remove_model(model_name)
+
+
+@cli.command()
+@click.argument('model', required=True)
+@click.option('--prompt', default=None, help='Single prompt to benchmark')
+@click.option('--promptfile', default=None, type=click.Path(exists=True), help='File with multiple prompts')
+@click.option('--repeat', default=1, type=int, help='Number of times to repeat the benchmark')
+@click.pass_context
+def benchmark(ctx, model, prompt, promptfile, repeat):
+    """Benchmark model performance with prompts"""
+    infernal = ctx.obj['infernal']
+    prompts = []
+    
+    if prompt and promptfile:
+        console.print("Provide either --prompt or --promptfile, not both")
+        return
+        
+    if prompt:
+        if not prompt.strip():
+            console.print("--prompt provided but empty")
+            return
+        prompts = [prompt]
+        effective_repeat = repeat
+    elif promptfile:
+        if not Path(promptfile).exists():
+            console.print("--promptfile provided but file does not exist")
+            return
+        config = parse_modelfile(promptfile)
+        for msg in config['MESSAGES']:
+            if msg['role'] == 'user':
+                prompts.append(msg['content'])
+        effective_repeat = 1
+        if repeat > 1:
+            console.print(f"Warning: --repeat={repeat} ignored for --promptfile (repetitions not supported for prompt files). Using repeat=1.")
+    else:
+        console.print("Please provide --prompt for benchmarking")
+        return
+        
+    if not prompts:
+        console.print("No prompts found")
+        return
+        
+    infernal.benchmark_model(model, prompts, repeat=effective_repeat)
 
 
 @cli.command()
@@ -709,55 +744,12 @@ def finetune(ctx, modelfile, output, name, epochs, batch_size, learning_rate):
 
             console.print(f"Finetuning complete! Your merged model is saved at: {output_dir}")
             console.print("To use your model with llama.cpp, convert it to GGUF using convert_hf_to_gguf.py. Example:")
-            console.print(f"python3 convert_hf_to_gguf.py --in {output_dir} --out <model_name>.gguf")
+            console.print(f"python3 convert_hf_to_gguf.py --in {output_dir} --out .gguf")
             console.print("Then upload the GGUF file to your Hugging Face repo for easy download and use with llama.cpp!")
 
         except Exception as e:
             console.print(f"Error during training: {e}")
             return
-
-
-@cli.command()
-@click.argument('model', required=True)
-@click.option('--prompt', default=None, help='Single prompt to benchmark')
-@click.option('--promptfile', default=None, type=click.Path(exists=True), help='File with multiple prompts')
-@click.option('--repeat', default=1, type=int, help='Number of times to repeat the benchmark')
-@click.pass_context
-def benchmark(ctx, model, prompt, promptfile, repeat):
-    """Benchmark model performance with prompts"""
-    infernal = ctx.obj['infernal']
-    prompts = []
-
-    if prompt and promptfile:
-        console.print("Provide either --prompt or --promptfile, not both")
-        return
-
-    if prompt:
-        if not prompt.strip():
-            console.print("--prompt provided but empty")
-            return
-        prompts = [prompt]
-        effective_repeat = repeat
-    elif promptfile:
-        if not Path(promptfile).exists():
-            console.print("--promptfile provided but file does not exist")
-            return
-        config = parse_modelfile(promptfile)
-        for msg in config['MESSAGES']:
-            if msg['role'] == 'user':
-                prompts.append(msg['content'])
-        effective_repeat = 1
-        if repeat > 1:
-            console.print(f"Warning: --repeat={repeat} ignored for --promptfile (repetitions not supported for prompt files). Using repeat=1.")
-    else:
-        console.print("Provide either --prompt or --promptfile")
-        return
-
-    if not prompts:
-        console.print("No prompts found")
-        return
-
-    infernal.benchmark_model(model, prompts, repeat=effective_repeat)
 
 
 if __name__ == '__main__':

@@ -8,8 +8,8 @@ def infernal_with_model(tmp_path):
     """Create InfernalLLM instance with a test model"""
     models_dir = tmp_path / "models"
     models_dir.mkdir()
-    
     infernal = InfernalLLM(str(models_dir))
+    
     infernal.config["models"]["test_model"] = {
         "filename": "test_model.gguf",
         "repo_id": "test/repo",
@@ -31,12 +31,11 @@ class TestInference:
         mock_llm.return_value = {
             "choices": [{"text": "Hello! How can I help you?"}]
         }
-        
+
         infernal_with_model.run_inference("test_model", "Hello")
         
         mock_llama_class.assert_called_once()
         mock_llm.assert_called_once()
-        
         captured = capsys.readouterr()
         assert "Loading test_model" in captured.out
 
@@ -46,7 +45,6 @@ class TestInference:
         infernal_with_model.run_inference("nonexistent", "Hello")
         
         mock_llama_class.assert_not_called()
-        
         captured = capsys.readouterr()
         assert "Model nonexistent not found" in captured.out
 
@@ -93,7 +91,7 @@ class TestInference:
     @patch('infernal.Prompt.ask')
     def test_interactive_mode_empty_input(self, mock_prompt, mock_llama_class, infernal_with_model):
         """Test interactive mode with empty input"""
-        mock_prompt.side_effect = ["", "   ", "quit"]
+        mock_prompt.side_effect = ["", " ", "quit"]
         mock_llm = MagicMock()
         mock_llama_class.return_value = mock_llm
         

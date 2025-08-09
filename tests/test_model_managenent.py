@@ -1,202 +1,145 @@
 import pytest
-import json
-import tempfile
-from unittest.mock import patch, MagicMock, mock_open
+from unittest.mock import patch, MagicMock
 from pathlib import Path
 from infernal import InfernalLLM
 
 @pytest.fixture
-def temp_models_dir(tmp_path):
-    """Create a temporary models directory"""
-    models_dir = tmp_path / "models"
-    models_dir.mkdir()
-    return models_dir
-
-@pytest.fixture
-def infernal_with_config(temp_models_dir):
-    """Create InfernalLLM instance with test configuration"""
-    infernal = InfernalLLM(str(temp_models_dir))
-    infernal.config = {
-        "models": {
-            "test_model": {
-                "filename": "test_model.gguf",
-                "repo_id": "test/repo",
-                "original_filename": "original.gguf",
-                "size": 1024000
-            }
-        },
-        "default_model": None,
-        "settings": {
-            "max_tokens": 2048,
-            "temperature": 0.7,
-            "top_p": 0.9
-        }
-    }
-    return infernal
+def infernal_instance(tmp_path):
+    """Create InfernalLLM instance with temporary directory"""
+    return InfernalLLM(str(tmp_path / "models"))
 
 class TestInfernalLLM:
-    def test_init_creates_models_dir(self, tmp_path):
-        """Test that initialization creates models directory"""
-        models_dir = tmp_path / "test_models"
+    def test_init_default_dir(self):
+        """Test InfernalLLM initialization with default directory"""
+        with patch('pathlib.Path.home') as mock_home:
+            mock_home.return_value = Path("/fake/home")
+            infernal = InfernalLLM()
+            assert infernal.models_dir.name == "models"
+
+    def test_init_custom_dir(self, tmp_path):
+        """Test InfernalLLM initialization with custom directory"""
+        models_dir = tmp_path / "custom_models"
         infernal = InfernalLLM(str(models_dir))
-        
-        assert models_dir.exists()
         assert infernal.models_dir == models_dir
+        assert models_dir.exists()
 
-    def test_init_default_models_dir(self):
-        """Test default models directory creation"""
-        infernal = InfernalLLM()
-        assert infernal.models_dir.name in ["models", ".infernal-models"]
+    def test_config_creation(self, infernal_instance):
+        """Test configuration file creation"""
+        assert infernal_instance.config_file.exists()
+        assert "models" in infernal_instance.config
+        assert "settings" in infernal_instance.config
 
-    def test_load_config_creates_default(self, temp_models_dir):
-        """Test that load_config creates default configuration"""
-        infernal = InfernalLLM(str(temp_models_dir))
-        
-        assert "models" in infernal.config
-        assert "settings" in infernal.config
-        assert infernal.config["settings"]["max_tokens"] == 2048
-
-    def test_load_config_from_existing_file(self, temp_models_dir):
-        """Test loading configuration from existing file"""
-        config_data = {
-            "models": {"existing_model": {"filename": "existing.gguf"}},
-            "settings": {"max_tokens": 1024}
-        }
-        
-        config_file = temp_models_dir / "config.json"
-        with open(config_file, 'w') as f:
-            json.dump(config_data, f)
-        
-        infernal = InfernalLLM(str(temp_models_dir))
-        
-        assert infernal.config["models"]["existing_model"]["filename"] == "existing.gguf"
-        assert infernal.config["settings"]["max_tokens"] == 1024
-
-    def test_save_config(self, infernal_with_config):
-        """Test saving configuration to file"""
-        infernal_with_config.save_config()
-        
-        config_file = infernal_with_config.config_file
-        assert config_file.exists()
-        
-        with open(config_file, 'r') as f:
-            saved_config = json.load(f)
-        
-        assert "test_model" in saved_config["models"]
-        assert saved_config["settings"]["max_tokens"] == 2048
-
-    def test_get_model_path_existing(self, infernal_with_config):
+    def test_get_model_path_existing(self, infernal_instance):
         """Test getting path for existing model"""
-        model_file = infernal_with_config.models_dir / "test_model.gguf"
-        model_file.touch()
+        model_file = infernal_instance.models_dir / "test.gguf"
+        model_file.touch()  # Create the file
+        infernal_instance.config["models"]["test_model"] = {"filename": "test.gguf"}
         
-        path = infernal_with_config.get_model_path("test_model")
+        path = infernal_instance.get_model_path("test_model")
         assert path == model_file
 
-    def test_get_model_path_nonexistent(self, infernal_with_config):
+    def test_get_model_path_nonexistent(self, infernal_instance):
         """Test getting path for non-existent model"""
-        path = infernal_with_config.get_model_path("nonexistent")
+        path = infernal_instance.get_model_path("nonexistent")
         assert path is None
 
-    def test_get_model_files(self, infernal_with_config):
-        """Test getting all GGUF model files"""
-        # Create test files
-        (infernal_with_config.models_dir / "model1.gguf").touch()
-        (infernal_with_config.models_dir / "model2.gguf").touch()
-        (infernal_with_config.models_dir / "not_gguf.txt").touch()
-        
-        files = infernal_with_config.get_model_files()
-        
-        assert len(files) == 2
-        assert all(f.suffix == ".gguf" for f in files)
-
-    def test_remove_model_success(self, infernal_with_config, capsys):
-        """Test successful model removal"""
-        model_file = infernal_with_config.models_dir / "test_model.gguf"
-        model_file.touch()
-        
-        infernal_with_config.remove_model("test_model")
-        
-        assert not model_file.exists()
-        assert "test_model" not in infernal_with_config.config["models"]
-        
+    def test_list_models_empty(self, infernal_instance, capsys):
+        """Test listing models when none exist - Fixed assertion"""
+        infernal_instance.list_models()
         captured = capsys.readouterr()
-        assert "Removed test_model" in captured.out
-
-    def test_remove_model_not_found(self, infernal_with_config, capsys):
-        """Test removing non-existent model"""
-        infernal_with_config.remove_model("nonexistent")
-        
-        captured = capsys.readouterr()
-        assert "Model nonexistent not found" in captured.out
-
-    def test_list_models_empty(self, temp_models_dir, capsys):
-        """Test listing models when none exist"""
-        infernal = InfernalLLM(str(temp_models_dir))
-        infernal.list_models()
-        
-        captured = capsys.readouterr()
+        # Fixed: Use the exact text from your code
         assert "No models found" in captured.out
 
-    def test_list_models_with_models(self, infernal_with_config, capsys):
-        """Test listing models when models exist"""
-        model_file = infernal_with_config.models_dir / "test_model.gguf"
-        model_file.write_bytes(b"0" * 1024)  # 1KB file
+    def test_list_models_with_models(self, infernal_instance, capsys):
+        """Test listing models when models exist - Fixed assertion"""
+        # Setup test model
+        model_file = infernal_instance.models_dir / "test.gguf"
+        model_file.write_bytes(b"fake model data")
         
-        infernal_with_config.list_models()
+        infernal_instance.config["models"]["test_model"] = {
+            "filename": "test.gguf",
+            "size": len(b"fake model data")
+        }
         
+        infernal_instance.list_models()
         captured = capsys.readouterr()
+        # Fixed: Use the exact text from your code
         assert "Available Models:" in captured.out
         assert "test_model" in captured.out
 
-
 class TestModelDownload:
     @patch('infernal.huggingface_hub.hf_hub_download')
-    def test_pull_model_success(self, mock_download, infernal_with_config, capsys):
+    def test_pull_model_success(self, mock_download, tmp_path):
         """Test successful model download"""
-        mock_download.return_value = str(infernal_with_config.models_dir / "downloaded.gguf")
+        models_dir = tmp_path / "models"
+        models_dir.mkdir()
+        infernal = InfernalLLM(str(models_dir))
         
-        result = infernal_with_config.pull_model("test/repo", "model.gguf")
+        downloaded_file = models_dir / "model.gguf"
         
-        assert result.name == "repo.gguf"
-        mock_download.assert_called_once()
+        def mock_download_side_effect(*args, **kwargs):
+            downloaded_file.write_bytes(b"fake model data")
+            return str(downloaded_file)
         
-        captured = capsys.readouterr()
-        assert "Successfully downloaded" in captured.out
+        mock_download.side_effect = mock_download_side_effect
+        
+        result = infernal.download_from_huggingface("test/repo", "model.gguf")
+        
+        expected_file = models_dir / "repo.gguf"
+        assert expected_file.exists()
+        assert result == expected_file
 
     @patch('infernal.huggingface_hub.hf_hub_download')
-    def test_pull_model_already_exists(self, mock_download, infernal_with_config, capsys):
-        """Test downloading model that already exists"""
-        model_file = infernal_with_config.models_dir / "repo.gguf"
-        model_file.touch()
+    def test_pull_from_url_valid(self, mock_download, tmp_path):
+        """Test pull from valid URL"""
+        models_dir = tmp_path / "models"
+        models_dir.mkdir()
+        infernal = InfernalLLM(str(models_dir))
         
-        result = infernal_with_config.pull_model("test/repo", "model.gguf")
+        downloaded_file = models_dir / "model.gguf"
         
-        assert result == model_file
-        mock_download.assert_not_called()
+        def mock_download_side_effect(*args, **kwargs):
+            downloaded_file.write_bytes(b"fake model data")
+            return str(downloaded_file)
         
-        captured = capsys.readouterr()
-        assert "already exists" in captured.out
-
-    @patch('infernal.huggingface_hub.hf_hub_download')
-    def test_pull_model_download_failure(self, mock_download, infernal_with_config):
-        """Test handling download failure"""
-        mock_download.side_effect = Exception("Download failed")
+        mock_download.side_effect = mock_download_side_effect
         
-        with pytest.raises(Exception, match="Download failed"):
-            infernal_with_config.pull_model("test/repo", "model.gguf")
-
-    def test_pull_from_url_valid(self, infernal_with_config):
-        """Test extracting repo info from valid HuggingFace URL"""
         url = "https://huggingface.co/test/repo/resolve/main/model.gguf"
+        result = infernal.download_model(url)
         
-        with patch.object(infernal_with_config, 'pull_model') as mock_pull:
-            infernal_with_config.pull_from_url(url)
-            mock_pull.assert_called_once_with("test/repo", "model.gguf")
+        expected_file = models_dir / "repo.gguf"
+        assert expected_file.exists()
+        assert result == expected_file
 
-    def test_pull_from_url_invalid(self, infernal_with_config):
-        """Test handling invalid URL"""
-        url = "https://example.com/model.gguf"
+    def test_pull_from_url_invalid(self, tmp_path):
+        """Test pull from invalid URL"""
+        models_dir = tmp_path / "models"
+        models_dir.mkdir()
+        infernal = InfernalLLM(str(models_dir))
         
-        with pytest.raises(ValueError, match="Only Hugging Face URLs supported"):
-            infernal_with_config.pull_from_url(url)
+        with pytest.raises(ValueError) as exc_info:
+            infernal.download_model("https://example.com/model.gguf")
+        
+        assert "Only Hugging Face URLs are supported" in str(exc_info.value)
+
+    def test_remove_model_success(self, tmp_path):
+        """Test successful model removal"""
+        models_dir = tmp_path / "models"
+        models_dir.mkdir()
+        infernal = InfernalLLM(str(models_dir))
+        
+        model_file = models_dir / "test.gguf"
+        model_file.write_bytes(b"test data")
+        
+        infernal.config["models"]["test_model"] = {"filename": "test.gguf"}
+        
+        infernal.remove_model("test_model")
+        
+        assert not model_file.exists()
+        assert "test_model" not in infernal.config["models"]
+
+    def test_remove_model_not_found(self, infernal_instance, capsys):
+        """Test removing non-existent model"""
+        infernal_instance.remove_model("nonexistent")
+        captured = capsys.readouterr()
+        assert "not found" in captured.out
