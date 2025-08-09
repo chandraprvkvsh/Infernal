@@ -20,7 +20,7 @@
 ```bash
 git clone https://github.com/chandraprvkvsh/Infernal.git
 cd infernal
-pip install -e .
+pip install .
 ```
 
 **Method 2: Direct installation**
