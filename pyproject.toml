@@ -41,6 +41,7 @@ dependencies = [
     "accelerate>=0.20.0",
     "bitsandbytes>=0.39.0",
     "tqdm>=4.65.0",
+    "pytest"
 ]
 
 [project.urls]
